@@ -1,0 +1,18 @@
+seq_name: custom_shoes
+exp_name: pred
+
+data_info:
+  dataroot: ./data/custom_shoes
+  obj_path: ../assets/shoes/1229a2e6e97e_A_basketball_shoes_.obj
+  normalize_mesh: true
+
+random_render: true
+
+system:
+  init_num_iterations: 100
+  init_lr: 0.01
+  joint_num_iterations: 200
+  joint_lr: 0.0001
+  loss:
+    lw_sil_obj: 1.0
+    lw_smooth_obj: 10.0
