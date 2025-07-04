@@ -1,9 +1,8 @@
 # CVPR'25 Hand-held Object Reconstruction from RGB Video with Dynamic Interaction
-
+This is the official repo for the implementation of **Hand-held Object Reconstruction from RGB Video with Dynamic Interaction**.  
+Shijian Jiang, Qi Ye, Rengan Xie, Yuchi Huo, Jiming Chen
 ## [Project page](https://east-j.github.io/dynhor/) |  [Paper](https://openaccess.thecvf.com/content/CVPR2025/html/Jiang_Hand-held_Object_Reconstruction_from_RGB_Video_with_Dynamic_Interaction_CVPR_2025_paper.html) | [Data](https://drive.google.com/drive/folders/1q6KSatlFLYWkqny4_aS8w5S_hSp-Jlc4?usp=sharing)
 <img src="assets/shoes_res.gif" width="300"> <img src="assets/kettle_res.gif" width="300">
-> This is the official repo for the implementation of **Hand-held Object Reconstruction from RGB Video with Dynamic Interaction**.  
-> Shijian Jiang, Qi Ye, Rengan Xie, Yuchi Huo, Jiming Chen
 
 ## TODO List
 - [x] ✅ Release the object pose estimation code

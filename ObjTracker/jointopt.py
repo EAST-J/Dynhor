@@ -37,7 +37,6 @@ class Joint_Optimizer(nn.Module):
         self.rotations_object = nn.Parameter(
             rotations_object6d.detach().clone(), requires_grad=True)
         self.register_buffer("verts_object_og", verts_object_og)
-        # Inititalize person parameters
         init_scales = int_scale_init * torch.ones(1).float()
         self.optimize_object_scale = optimize_object_scale
         if optimize_object_scale:
