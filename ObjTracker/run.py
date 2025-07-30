@@ -8,6 +8,7 @@ import shutil
 
 from PIL import Image
 from pytorch3d.io import load_objs_as_meshes
+from pytorch3d.structures import Meshes
 from detectron2.structures import BitMasks
 from tensorboardX import SummaryWriter
 
@@ -113,6 +114,7 @@ if __name__ == '__main__':
         obj_verts_can = obj_verts
     obj_faces = np.array(obj_mesh.faces_packed())
     obj_textures = obj_mesh.textures
+    obj_mesh = Meshes(verts=[torch.from_numpy(obj_verts_can)], faces=[obj_mesh.faces_packed()], textures=obj_textures)
     # Define camera parameters
     height, width, _ = images_np[0].shape
     image_size = max(height, width)
@@ -127,7 +129,7 @@ if __name__ == '__main__':
 
     if config['random_render']:
         prior_batched_renderings, prior_depths, Rs, Ts, Ks = batch_random_render(device='cuda', mesh=obj_mesh.to('cuda'), 
-                                                                        view_numbers=6000, 
+                                                                        view_numbers=6000, # You can reduce the view_numbers to save the memory usage.
                                                                         H=RENDER_H, W=RENDER_W, distance_scale=3.5)
     else:
         prior_batched_renderings, prior_depths, Rs, Ts, Ks = batch_render(device='cuda', mesh=obj_mesh.to('cuda'), 
