@@ -9,6 +9,8 @@ Shijian Jiang, Qi Ye, Rengan Xie, Yuchi Huo, Jiming Chen
 - [ ] 🛠️ Release the processing code with custom data 
 - [ ] 🛠️ Release the reconstruction code based on NeuS  
 - [ ] 🚀 Replace NeuS with instant-nsr-pl for faster reconstruction
+      
+🚧**[WIP]**: I’ve updated the code in the `dev` branch to include the reconstruction part using [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl). You can follow the instructions in `example.sh` to use it. However, some parts of the code may still require further adjustments.
 
 ## Installation
 ### Set up the environment
@@ -68,4 +70,5 @@ Cite as below if you find this repository is helpful to your project:
 ```
 
 ## Acknowledgments
+
 Our code benefits a lot from [homan](https://github.com/hassony2/homan), [NeuS](https://github.com/Totoro97/NeuS), [HHOR](https://github.com/dihuangdh/HHOR). If you find our work useful, consider checking out their work.
