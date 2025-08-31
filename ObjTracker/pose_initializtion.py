@@ -2,7 +2,9 @@
 Utilities for computing initial object pose fits from instance masks.
 Some part of the code adapted from HOMAN: https://github.com/hassony2/homan
 """
+import os
 import numpy as np
+import cv2
 import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
@@ -15,6 +17,7 @@ from utils.geometry import (
 from utils.camera import get_K_crop_resize, TCO_init_from_boxes_zup_autodepth, rotation_angle_difference
 from utils.losses import batch_mask_iou
 from utils.bbox import  make_bbox_square, bbox_xy_to_wh, bbox_wh_to_xy, crop_and_resize
+from utils.semantic_corres import min_distance_to_point_set, find_semantic_correspondences, visualize_correspondences
 from pytorch3d.renderer import (
     PerspectiveCameras, 
     RasterizationSettings, 
@@ -47,6 +50,7 @@ class ObjTracker(nn.Module):
         K=None,
         rasterizer=None,
         shader=None,
+        semantic_corres_infos=None,
         lw_mask=1.0,
         lw_sem=1.0
     ):
@@ -77,6 +81,7 @@ class ObjTracker(nn.Module):
 
         self.rasterizer = rasterizer
         self.shader = shader
+        self.semantic_corres_infos = semantic_corres_infos
         origin_K = K[:, :2] * REND_SIZE
         self.pytorch3d_cameras = PerspectiveCameras(focal_length=origin_K[0:1, 0, 0].reshape(-1, 1).repeat(num_initializations, 1), principal_point=origin_K[0:1, :2, -1].repeat(num_initializations, 1), 
                                                     in_ndc=False, R=torch.eye(3).unsqueeze(0).repeat(num_initializations, 1, 1), T=torch.zeros((1, 3)).repeat(num_initializations, 1), 
@@ -140,6 +145,37 @@ class ObjTracker(nn.Module):
         too_far = torch.max(coord_z - self.sil_renderer.far, zeros).sum(dim=(1, 2))
         return lower_right + upper_left + behind + too_far
     
+    def compute_semantic_reproj_loss(self):
+        pts_3d = self.semantic_corres_infos['pts_3d'].clone()
+        pts_2d = self.semantic_corres_infos['pts_2d'].clone()
+        proj_K = self.semantic_corres_infos['proj_K']
+        # weights = self.semantic_corres_infos['cos']
+        rots = rot6d_to_matrix(self.rotations)
+        pts_3d = torch.matmul(pts_3d.unsqueeze(0), rots) + self.translations
+        pts_3d_proj = pts_3d[0] @ proj_K.T
+        pts_3d_proj = pts_3d_proj[:, :2] / (pts_3d_proj[:, 2:] + 1e-8)
+        pts_2d[:, 0] = 2 * pts_2d[:, 0] / REND_SIZE - 1
+        pts_2d[:, 1] = 2 * pts_2d[:, 1] / REND_SIZE - 1
+        pts_3d_proj[:, 0] = 2 * pts_3d_proj[:, 0] / REND_SIZE - 1
+        pts_3d_proj[:, 1] = 2 * pts_3d_proj[:, 1] / REND_SIZE - 1
+        # reproj_error = weights[:, None] * (pts_3d_proj - pts_2d)
+        return F.l1_loss(pts_3d_proj, pts_2d, reduction='sum')
+
+    def corres_forward(self):
+        loss_dict = {}
+        verts = self.apply_transformation()
+        render_sil = self.sil_renderer(verts, self.faces, mode="silhouettes")
+        render_mask = self.keep_mask * render_sil
+        loss_dict["iou"] = (1 - batch_mask_iou(render_mask,
+                                            self.ref_mask))
+        with torch.no_grad():
+            iou = batch_mask_iou(render_mask.detach(),
+                                            self.ref_mask.detach())
+        loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
+        if self.semantic_corres_infos is not None:
+            loss_dict["semantic_reproj"] = self.compute_semantic_reproj_loss() #? 关于loss weight的设置
+        return loss_dict, iou
+
     def coarse_forward(self):
         loss_dict = {}
         verts = self.apply_transformation()
@@ -253,6 +289,8 @@ def find_optimal_pose(
     dino_model,
     K,
     render_view_infos,
+    view_selection_dirs,
+    view_idx,
     num_iterations=50,
     num_initializations=1,
     lr=1e-3,
@@ -312,17 +350,76 @@ def find_optimal_pose(
         if rel_angle_full[max_idx] > 85.0 or former_rel_angle_full[max_idx] > 85.0:
             max_idx = -1
     if max_idx != -1:
+        filered = False
         best_rotation_init = render_view_infos["render_rotations"][max_idx:max_idx+1].transpose(1, 2).clone()
     else:
+        filered = True
         best_rotation_init = rotations_init.clone()
         if torch.min(rel_angle_full) < 15.0: # 判断是否与上一帧差异过大，或语义不够相似
             max_idx = torch.argmin(rel_angle_full) 
             if (former_max_idx != -1 and former_rel_angle_full[max_idx].item() > 30.0) or dino_cos[max_idx] < (torch.max(dino_cos) - torch.std(dino_cos)):
+                semantic_corres_infos = None
                 max_idx = -1
-        
+        else:
+            semantic_corres_infos = None
     best_translation_init = TCO_init_from_boxes_zup_autodepth(
             bbox, torch.matmul(vertices.unsqueeze(0), best_rotation_init),
             K).unsqueeze(1)
+    if max_idx != -1: # save the view selction results
+        if os.path.exists(view_selection_dirs):
+            def render_idx(idx):
+                res_img = np.hstack([render_view_infos["render_crop_imgs"][idx].detach().cpu().numpy(),
+                                    annotation["crop_image"].transpose(1, 2, 0)])
+                if not use_former or rotations_init is None:
+                    cv2.imwrite(os.path.join(view_selection_dirs, 
+                            '{}_{}_select_view{}.jpg'.format(view_idx, dino_cos[idx], idx)), res_img*255)
+                else:
+                    cv2.imwrite(os.path.join(view_selection_dirs, 
+                            '{}_{}_{}_{}_{}_select_view{}.jpg'.format(view_idx, dino_cos[idx], rel_angle_full[idx], former_rel_angle_full[idx], filered, idx)), res_img*255)
+            render_idx(max_idx)
+        if mode == 'corres' and lw_sem == 0:
+            max_idx_render_feat = render_view_infos["render_feats"][max_idx:max_idx+1]
+            max_idx_render_mask = render_mask[max_idx:max_idx+1]
+            max_idx_render_depth = render_view_infos["render_crop_depths"][max_idx:max_idx+1]
+            max_idx_render_K = render_view_infos["render_roi_Ks"][max_idx]
+            max_idx_render_R = render_view_infos["render_rotations"][max_idx]
+            max_idx_render_T = render_view_infos["render_translations"][max_idx]
+            ##### Find semantic correspondence ##### 
+            image_render_cos = torch.bmm(gt_dino_feat, max_idx_render_feat.transpose(1, 2))[0] # (dino_feat_size ** 2) * (dino_feat_size ** 2)
+            selected_points_image_1, selected_points_image_2 = find_semantic_correspondences(image_render_cos, crop_mask.reshape(-1), max_idx_render_mask.reshape(-1), 
+                                                                                                gt_dino_feat[0], dino_feat_size, dino_feat_size)
+            uv_idxs = torch.arange(dino_feat_size * dino_feat_size)
+            uv_idxs_row = (uv_idxs // dino_feat_size) * dino_model.model.patch_size + dino_model.model.patch_size / 2
+            uv_idxs_col =  (uv_idxs % dino_feat_size) * dino_model.model.patch_size + dino_model.model.patch_size / 2
+            uvs = torch.cat([uv_idxs_col.reshape(-1, 1), uv_idxs_row.reshape(-1, 1)], dim=1)
+            sample_uvs = uvs[selected_points_image_1].to(max_idx_render_depth.device)
+            render_corres_uvs = uvs[selected_points_image_2].to(max_idx_render_depth.device)
+            # 缩放回原来的尺度
+            scale_h = dino_model.smaller_edge_size / REND_SIZE
+            scale_w = dino_model.smaller_edge_size / REND_SIZE
+            sample_uvs[:, 0], render_corres_uvs[:, 0] = sample_uvs[:, 0] / scale_w, render_corres_uvs[:, 0] / scale_w
+            sample_uvs[:, 1], render_corres_uvs[:, 1] = sample_uvs[:, 1] / scale_h, render_corres_uvs[:, 1] / scale_h
+            ### Establish 3D-2D correspondences ###
+            #? 这里取depth直接取int是否会影响到效果？ 插值的depth是否会有点问题？ 先简单的使用点距离筛选掉不合理的三维点
+            render_corres_depth = max_idx_render_depth[0, render_corres_uvs[:, 1].int(), render_corres_uvs[:, 0].int()]
+            fx, fy = max_idx_render_K[0, 0], max_idx_render_K[1, 1]
+            cx, cy = max_idx_render_K[0, 2], max_idx_render_K[1, 2]
+            X = (render_corres_uvs[:, 0] - cx) * render_corres_depth / fx
+            Y = (render_corres_uvs[:, 1] - cy) * render_corres_depth / fy
+            Z = render_corres_depth
+            xyz = torch.cat([X.reshape(-1, 1), Y.reshape(-1, 1), Z.reshape(-1, 1)], dim=1)
+            c2w_rot = max_idx_render_R.T
+            c2w_trans = -max_idx_render_R.T @ max_idx_render_T
+            xyz_w = xyz @ c2w_rot.T + c2w_trans.reshape(1, 3) # object template 3D points in the object coordinate
+            dis_ = min_distance_to_point_set(xyz_w, vertices)
+            dis_thres = torch.mean(dis_[render_corres_depth!=-1]) + torch.std(dis_[render_corres_depth!=-1])
+            cos_ = image_render_cos[selected_points_image_1, selected_points_image_2].to(dis_.device) #? 考虑semantic correspondence相似性阈值的问题
+            corres_mask = (dis_ < dis_thres)
+            semantic_corres_infos = {"pts_2d": sample_uvs[corres_mask], "pts_3d": xyz_w[corres_mask], "proj_K": max_idx_render_K, "cos": cos_[corres_mask]}
+            ###
+            visualize_correspondences(annotation["crop_image"].transpose(1, 2, 0), render_view_infos["render_crop_imgs"][max_idx].cpu().numpy(), 
+                                        sample_uvs[corres_mask].cpu().numpy(), render_corres_uvs[corres_mask].cpu().numpy(), 
+                                        os.path.join(view_selection_dirs, '{}_2d_corres.jpg'.format(view_idx)))
     # Bring crop K to NC rendering space
     camintr_roi[:, :2] = camintr_roi[:, :2] / REND_SIZE
 
@@ -339,6 +436,7 @@ def find_optimal_pose(
         K=camintr_roi,
         rasterizer=rasterizer,
         shader=shader,
+        semantic_corres_infos=semantic_corres_infos,
         lw_mask=lw_mask,
         lw_sem=lw_sem,
     )
@@ -348,6 +446,8 @@ def find_optimal_pose(
         optimizer.zero_grad()
         if mode == "fine":
             loss_dict, iou = model()
+        elif mode == 'corres':
+            loss_dict, iou = model.corres_forward()
         else:
             loss_dict, iou = model.coarse_forward()
         losses = sum(loss_dict.values())
@@ -390,6 +490,7 @@ def find_optimal_poses(dino_model,
                        lr=1e-2,
                        lw_sem=1.0,
                        mode='fine',
+                       view_selection_dirs=None,
                        use_former=True):
     '''
     Initialize the object poses for each frame indiviually.
@@ -428,6 +529,7 @@ def find_optimal_poses(dino_model,
             vertices=vertices,
             faces=faces,
             textures=textures,
+            view_idx=optim_idx,
             K=K,
             best_score=best_score,
             num_iterations=num_iterations,
@@ -442,6 +544,7 @@ def find_optimal_poses(dino_model,
             lr=lr,
             use_former=use_former,
             former_max_idx=former_max_idx,
+            view_selection_dirs=view_selection_dirs,
         )
         verts_trans = model.apply_transformation()
         object_parameters = {
@@ -449,6 +552,7 @@ def find_optimal_poses(dino_model,
             "translations": model.translations.detach()[0],
             "K_roi": model.K.detach(),
             "verts_trans": verts_trans.detach()[0],
+            "semantic_corres_infos": model.semantic_corres_infos # a dic
         }
         all_object_parameters.append(object_parameters)
         previous_rotations = rot6d_to_matrix(model.rotations.detach())
@@ -467,5 +571,6 @@ def find_optimal_poses(dino_model,
             final_params[key] = obj_params[key].unsqueeze(0).cuda()
         final_params["target_masks"] = torch.from_numpy(info["target_crop_mask"]).unsqueeze(0).cuda()
         final_params["verts"] = vertices.unsqueeze(0).cuda()
+        final_params["semantic_corres_infos"] = obj_params["semantic_corres_infos"]
         all_final_params.append(final_params)
     return all_final_params

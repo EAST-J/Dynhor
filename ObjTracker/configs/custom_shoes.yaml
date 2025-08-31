@@ -16,3 +16,4 @@ system:
   loss:
     lw_sil_obj: 1.0
     lw_smooth_obj: 10.0
+    lw_sem_correspondence: 0.1

@@ -8,6 +8,7 @@ from pytorch3d.renderer.camera_utils import rotate_on_spot
 from pytorch3d.utils import opencv_from_cameras_projection
 import torch
 import math
+import time
 
 def cameras_from_opencv_to_pytorch3d(
     R: torch.Tensor,
@@ -123,40 +124,72 @@ def get_uniform_SO3_RT(num_azimuth, num_elevation, distance, center, device="cpu
     return rotation, translation, azimuth, elevation
 
 @torch.no_grad()
-def run_rendering(device, mesh, num_azimuth, num_elevation, roll_rotation, H, W, add_angle_azi=0, add_angle_ele=0, use_normal_map=False):
+def run_rendering(device, mesh, num_azimuth, num_elevation, roll_rotation, H, W, add_angle_azi=0, add_angle_ele=0, use_normal_map=False, render_bs=-1):
     # 关于Roll角的设定: https://github.com/facebookresearch/pytorch3d/issues/927
     bbox = mesh.get_bounding_boxes()
     radius = bbox.abs().max()
     center = bbox.mean(2)
-    distance = 2 * radius # TODO: adjust this distance according to the mesh size
+    distance = 2 * radius
     rotation, translation, azimuth, elevation = get_uniform_SO3_RT(num_azimuth, num_elevation, distance, center, device=device, add_angle_azi=add_angle_azi, add_angle_ele=add_angle_ele)
     rotation, translation = rotate_on_spot(rotation, translation, roll_rotation)
-    camera = PerspectiveCameras(R=rotation, T=translation, device=device)
+    normal_batched_renderings = None
+    if use_normal_map:
+        raise NotImplementedError
+    # 增加batch_render防止超出GPU显存, e.g. for 3090
     rasterization_settings = RasterizationSettings(
         image_size=(H, W), blur_radius=0.0, faces_per_pixel=1, bin_size=0
     )
-    rasterizer = MeshRasterizer(cameras=camera, raster_settings=rasterization_settings)
-    camera_centre = camera.get_camera_center()
-    lights = PointLights(
-        diffuse_color=((0.4, 0.4, 0.5),),
-        ambient_color=((0.6, 0.6, 0.6),),
-        specular_color=((0.01, 0.01, 0.01),),
-        location=camera_centre,
-        device=device,
-    )
-    shader = HardPhongShader(device=device, cameras=camera, lights=lights)
-    batch_renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
-    batch_mesh = mesh.extend(len(rotation))
-    normal_batched_renderings = None
-    batched_renderings = batch_renderer(batch_mesh)
-    if use_normal_map:
-        raise NotImplementedError
-    fragments = rasterizer(batch_mesh)
-    depth = fragments.zbuf
+    camera = PerspectiveCameras(R=rotation, T=translation, device=device)
+    if render_bs == -1:
+        rasterizer = MeshRasterizer(cameras=camera, raster_settings=rasterization_settings)
+        camera_centre = camera.get_camera_center()
+        lights = PointLights(
+            diffuse_color=((0.4, 0.4, 0.5),),
+            ambient_color=((0.6, 0.6, 0.6),),
+            specular_color=((0.01, 0.01, 0.01),),
+            location=camera_centre,
+            device=device,
+        )
+        shader = HardPhongShader(device=device, cameras=camera, lights=lights)
+        batch_renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
+        batch_mesh = mesh.extend(len(rotation))
+        batched_renderings = batch_renderer(batch_mesh)
+        fragments = rasterizer(batch_mesh)
+        depth = fragments.zbuf
+    else:
+        num_batches = rotation.shape[0] // render_bs
+        num_batches = (num_batches + 1) if (rotation.shape[0] % render_bs) != 0 else num_batches
+        batched_renderings = []
+        depth = []
+        for i_render in range(num_batches):
+            start_render_idx = i_render * render_bs
+            end_render_idx = start_render_idx + render_bs
+            end_render_idx = end_render_idx if end_render_idx <= rotation.shape[0] else rotation.shape[0]
+            rotation_ = rotation[start_render_idx:end_render_idx]
+            translation_ = translation[start_render_idx:end_render_idx]
+            camera_ = PerspectiveCameras(R=rotation_, T=translation_, device=device)
+            rasterizer = MeshRasterizer(cameras=camera_, raster_settings=rasterization_settings)
+            camera_centre = camera_.get_camera_center()
+            lights = PointLights(
+                diffuse_color=((0.4, 0.4, 0.5),),
+                ambient_color=((0.6, 0.6, 0.6),),
+                specular_color=((0.01, 0.01, 0.01),),
+                location=camera_centre,
+                device=device,
+            )
+            shader = HardPhongShader(device=device, cameras=camera_, lights=lights)
+            batch_renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
+            batch_mesh = mesh.extend(len(rotation_))
+            batched_renderings.append(batch_renderer(batch_mesh).cpu())
+            fragments_ = rasterizer(batch_mesh)
+            depth.append(fragments_.zbuf.cpu())
+        batched_renderings = torch.cat(batched_renderings, dim=0)
+        depth = torch.cat(depth, dim=0)
     return batched_renderings, normal_batched_renderings, camera, depth
 
 @torch.no_grad()
 def run_random_rendering(device, mesh, view_nums, H, W, rotation=None, use_normal_map=False, distance_scale=2.5):
+    # 关于Roll角的设定: https://github.com/facebookresearch/pytorch3d/issues/927
     bbox = mesh.get_bounding_boxes()
     radius = bbox.abs().max()
     center = bbox.mean(2)
@@ -218,7 +251,7 @@ def render_mesh_opencv_pose(device, mesh, R, T, K, H, W):
     depth = fragments.zbuf
     return batched_renderings,camera, depth
 
-def batch_render(device, mesh, num_azimuth, num_elevation, num_roll, H, W, return_camera=False, use_normal_map=False):
+def batch_render(device, mesh, num_azimuth, num_elevation, num_roll, H, W, return_camera=False, use_normal_map=False, render_bs=-1):
     add_angle_azi = 0
     add_angle_ele = 0
     if num_roll == 1:
@@ -234,7 +267,8 @@ def batch_render(device, mesh, num_azimuth, num_elevation, num_roll, H, W, retur
         roll_rotation = axis_angle_to_matrix(torch.FloatTensor([0, 0, math.radians(roll_angle.item())])).to(device)
         try:
             rendering, _, camera, depth =  run_rendering(device, mesh, num_azimuth, num_elevation, roll_rotation, 
-                                                         H, W, add_angle_azi=add_angle_azi, add_angle_ele=add_angle_ele, use_normal_map=use_normal_map)
+                                                         H, W, add_angle_azi=add_angle_azi, add_angle_ele=add_angle_ele, 
+                                                         use_normal_map=use_normal_map, render_bs=render_bs)
             R_, T_, K_ = opencv_from_cameras_projection(camera, torch.tensor([[H, W]]).repeat(rendering.shape[0], 1))
             renderings.append(rendering.cpu())
             Rs.append(R_)
