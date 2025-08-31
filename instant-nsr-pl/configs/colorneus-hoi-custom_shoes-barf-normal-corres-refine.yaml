@@ -1,13 +1,13 @@
-name: neus-hoi-custom3
-trial_name: custom3-refine
+name: sdf-hoi-custom_shoes
+trial_name: custom_shoes-coarse
 tag: ""
 seed: 42
 
 use_barf: true
 dataset:
-  name: hoi
-  root_dir: /remote-home/jiangshijian/new_exp/data
-  seq_name: custom3
+  name: hoi_dkm
+  root_dir: ../ObjTracker/data/
+  seq_name: custom_shoes
   img_wh:
     - 640
     - 480
@@ -19,8 +19,8 @@ dataset:
   select_win: 5
   load_data_on_gpu: true
   normalize_mesh: false
-  obj_path: /remote-home/jiangshijian/new_exp/Proghor/instant-nsr-pl/exp/sdf-hoi-custom3/custom3-coarse/save/it5000-mc512-clean.obj
-  meta_dir: /remote-home/jiangshijian/new_exp/Proghor/FeatureMatcher/pose_optimizer/custom3_indiviual/refine
+  obj_path: ./exp/sdf-hoi-custom_shoes/custom_shoes-coarse/save/it5000-mc512-clean.obj
+  meta_dir: ../ObjTracker/exps/custom_shoes/refine/
   sample_foreground_ratio: 0.8
 
 

@@ -13,4 +13,4 @@ def make(name, config):
     return dataset
 
 
-from . import colmap, gtho3d, hoi_dkm, hoi_cotracker
+from . import colmap, hoi_dkm, hoi_cotracker
