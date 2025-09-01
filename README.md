@@ -50,7 +50,7 @@ You can download the demo data from [here](https://drive.google.com/drive/folder
 bash example.sh
 ```
 - After finishing the training, you can get colored mesh like:\
-<img src="assets/sample.png" width="500">
+<img src="assets/sample_recon.png" width="500">
 
 ## Citation
 Cite as below if you find this repository is helpful to your project:
