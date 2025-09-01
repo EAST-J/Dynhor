@@ -8,7 +8,9 @@ Shijian Jiang, Qi Ye, Rengan Xie, Yuchi Huo, Jiming Chen
 - [x] ✅ Release the object pose estimation code
 - [ ] 🛠️ Release the processing code with custom data 
 - [ ] 🛠️ Release the reconstruction code based on NeuS  
-- [ ] 🚀 Replace NeuS with instant-nsr-pl for faster reconstruction
+- [x] 🚀 Replace NeuS with instant-nsr-pl for faster reconstruction
+
+⚠️: The dev branch is WIP — we’re adding changes from our CVPR paper and improving reconstruction results.
 
 ## Installation
 ### Set up the environment
@@ -19,7 +21,7 @@ pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https
 # requirements
 pip install -r ObjTracker/requirements.txt
 ```
-
+Following [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) for installing Nerfacc, PyTorch Lightning, and other dependencies.
 ## Usage
 
 #### Data Convention
@@ -43,17 +45,12 @@ The data is organized as follows:
 You can download the demo data from [here](https://drive.google.com/drive/folders/1q6KSatlFLYWkqny4_aS8w5S_hSp-Jlc4?usp=sharing).
 
 #### Running
-- **Estimate object poses**
+- Follow the steps in `example.sh`
 ```bash
-cd ./ObjTracker
-python run.py --config_path ./configs/custom_shoes.yaml 
-# After running, you can render the results
-python vis.py --config_path ./exps/custom_shoes/pred/custom_shoes.yaml 
+bash example.sh
 ```
-- **Reconstruct object**
-```bash
-cd ../NeuS
-```
+- After finishing the training, you can get colored mesh like:\
+<img src="assets/sample.png" width="500">
 
 ## Citation
 Cite as below if you find this repository is helpful to your project:
@@ -68,4 +65,4 @@ Cite as below if you find this repository is helpful to your project:
 ```
 
 ## Acknowledgments
-Our code benefits a lot from [homan](https://github.com/hassony2/homan), [NeuS](https://github.com/Totoro97/NeuS), [HHOR](https://github.com/dihuangdh/HHOR). If you find our work useful, consider checking out their work.
+Our code benefits a lot from [homan](https://github.com/hassony2/homan), [NeuS](https://github.com/Totoro97/NeuS), [HHOR](https://github.com/dihuangdh/HHOR), [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl), [HOLD](https://github.com/zc-alexfan/hold). If you find our work useful, consider checking out their work.
